@@ -56,7 +56,7 @@ An AI-powered solution to automatically retrieve voyage numbers and arrival date
 
    Create a `.env` file in the project root:
    ```
-   OPENAI_API_KEY=your_openai_api_key_here
+   GOOGLE_API_KEY=your_google_gemini_api_key_here
    ```
    
    For reference, see the example in `dot-env-example`.
