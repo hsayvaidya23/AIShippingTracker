@@ -52,7 +52,7 @@ async def track_shipping(booking_id, use_stored=True, headless=False):
         3. Search for Track & Trace and click on it:
             - Input booking ID in search or B/L No. field 
             - Click on Search button 
-        5. Scrape the full page content and extract:
+        4. Scrape the full page content and extract:
             - Voyage number from vessel name format (XXXXX XXXW)
             - Arrival date with time from ETB (Estimated Time of Berthing)
     
