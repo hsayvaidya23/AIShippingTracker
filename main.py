@@ -1,25 +1,28 @@
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI  
 from browser_use import Agent, Browser, BrowserConfig
 from dotenv import load_dotenv
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 
 # Load environment variables from .env
 load_dotenv()
 
-# Get OpenAI API key from environment
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
+# Get Google API key from environment
+google_api_key = os.getenv("GOOGLE_API_KEY")
+if not google_api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable is not set")
 
 # Define the storage path for interactions
 STORAGE_DIR = "interactions"
+RESULTS_DIR = "results"
 STORAGE_FILE = os.path.join(STORAGE_DIR, "hmm_tracking_interactions.json")
 
 # Ensure storage directory exists
 os.makedirs(STORAGE_DIR, exist_ok=True)
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
 async def track_shipping(booking_id, use_stored=True, headless=False):
     """
@@ -34,10 +37,10 @@ async def track_shipping(booking_id, use_stored=True, headless=False):
         Dictionary containing tracking information
     """
     # Initialize LLM with recommended settings
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",  # Best performance according to docs
-        temperature=0.0,  # Lower temperature for consistent results
-        api_key=openai_api_key,  # Explicitly set API key
+    llm = ChatGoogleGenerativeAI(  
+        model='gemini-2.0-flash-exp',
+        temperature=0.0,
+        google_api_key=google_api_key
     )
     
     # Define the task with clear instructions
@@ -46,15 +49,12 @@ async def track_shipping(booking_id, use_stored=True, headless=False):
     
         1. Go to http://www.seacargotracking.net/ 
         2. Look for HMM (Hyundai Merchant Marine) or similar options
-        3. Try different tracking methods if available:
-        - Input booking ID in search or B/L No. field 
-        - Click on Search button 
-        - Try alternate tracking sites like www.hmm21.com if available
-        - If any site blocks automation, try to bypass restrictions by:
-         - Waiting for a few seconds between actions
-         - Using different input methods or form fields
-         - Checking for CAPTCHA and describing what you see
-        5. Extract voyage number and arrival date from results
+        3. Search for Track & Trace and click on it:
+            - Input booking ID in search or B/L No. field 
+            - Click on Search button 
+        5. Scrape the full page content and extract:
+            - Voyage number from vessel name format (XXXXX XXXW)
+            - Arrival date with time from ETB (Estimated Time of Berthing)
     
     Return JSON with:
     {{
@@ -64,6 +64,7 @@ async def track_shipping(booking_id, use_stored=True, headless=False):
         "notes": "Include any issues encountered with website restrictions"
     }}
     """
+    
     
     # Check if we have stored interactions and should use them
     stored_interactions = None
@@ -78,9 +79,7 @@ async def track_shipping(booking_id, use_stored=True, headless=False):
     
     # Configure browser options
     browser_config = BrowserConfig(
-        # viewport_size={"width": 1280, "height": 720},  # Set larger viewport for better visibility
-        # headless=headless,  # Control headless mode through parameter
-          browser_binary_path='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' 
+        browser_binary_path='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' 
     )
     
     browser = Browser(config=browser_config)
@@ -134,9 +133,9 @@ async def main():
     print("\nResult:")
     print(result)
 
+
 if __name__ == "__main__":
     asyncio.run(main())
-
 
 
 

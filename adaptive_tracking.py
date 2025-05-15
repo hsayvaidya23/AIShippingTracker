@@ -1,4 +1,4 @@
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI  
 from browser_use import Agent, Browser, BrowserConfig
 from dotenv import load_dotenv
 import asyncio
@@ -10,9 +10,9 @@ import sys
 load_dotenv()
 
 # Get OpenAI API key from environment
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
+google_api_key = os.getenv("GOOGLE_API_KEY") 
+if not google_api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable is not set")
 
 # Define the storage path for interactions
 STORAGE_DIR = "interactions"
@@ -30,10 +30,10 @@ async def adaptive_tracking(booking_id, headless=False):
         Dictionary containing tracking information
     """
     # Initialize LLM with recommended settings
-    llm = ChatOpenAI(
-        model="gpt-4o",
+    llm = ChatGoogleGenerativeAI(  
+        model='gemini-2.0-flash-exp',
         temperature=0.0,
-        api_key=openai_api_key,  # Explicitly set API key
+        google_api_key=google_api_key
     )
     
     # Check if stored interactions exist
@@ -57,11 +57,14 @@ async def adaptive_tracking(booking_id, headless=False):
     task = f"""
     Using the previous successful interactions with seacargotracking.net, retrieve the voyage number and arrival date for HMM booking ID '{booking_id}':
     
-    1. Go to seacargotracking.net
-    2. Navigate to the HMM carrier option
-    3. Enter the booking ID '{booking_id}' in the appropriate field
-    4. Submit the form and wait for results
-    5. Extract the voyage number and arrival date from the results
+    1. Go to http://www.seacargotracking.net/ 
+    2. Look for HMM (Hyundai Merchant Marine) or similar options
+    3. Search for Track & Trace and click on it:
+        - Input booking ID in search or B/L No. field 
+        - Click on Search button 
+    4. Scrape the full page content and extract:
+        - Voyage number from vessel name format (XXXXX XXXW)
+        - Arrival date with time from ETB (Estimated Time of Berthing)
     
     Return ONLY a JSON object with fields 'booking_id', 'voyage_number', and 'arrival_date'.
     If any information cannot be found, set the value to "Not available".
@@ -71,8 +74,7 @@ async def adaptive_tracking(booking_id, headless=False):
     
     # Configure browser with optimal settings
     browser_config = BrowserConfig(
-        viewport_size={"width": 1280, "height": 720},
-        headless=headless,  # Control headless mode through parameter
+        browser_binary_path='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' 
     )
     
     browser = Browser(config=browser_config)
@@ -111,3 +113,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main()) 
+
+
