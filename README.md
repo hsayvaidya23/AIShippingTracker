@@ -2,6 +2,12 @@
 
 An AI-powered solution to automatically retrieve voyage numbers and arrival dates for HMM shipping bookings using seacargotracking.net.
 
+## Demo
+
+Check out the project demonstration video:
+
+[Watch Demo Video](https://drive.google.com/file/d/1eY4koHCfoT7_FRZUunxJPgaQunLEe3JH/view?usp=sharing)
+
 ## Features
 
 - **Natural Language Automation**: Uses AI to navigate the shipping tracking website without hardcoded interactions
@@ -154,4 +160,4 @@ You can verify this information by manually visiting seacargotracking.net and se
 - **Browser Issues**: If the browser doesn't start, try running `playwright install` again
 - **API Key Errors**: Ensure your OpenAI API key is correctly set in the `.env` file
 - **Website Changes**: If the website structure changes significantly, delete the `interactions` folder to rebuild the interaction model
-- **Resource Usage**: If experiencing high resource usage, try running in headless mode with `--headless` flag 
+- **Resource Usage**: If experiencing high resource usage, try running in headless mode with `--headless` flag
