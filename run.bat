@@ -10,5 +10,3 @@ IF "%~1"=="" (
     echo Tracking booking ID: %1
     python main.py %1
 )
-
-pause

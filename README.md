@@ -10,10 +10,11 @@ Check out the project demonstration video:
 
 ## Features
 
-- **Natural Language Automation**: Uses AI to navigate the shipping tracking website without hardcoded interactions
-- **Process Persistence**: Stores successful interactions for future use
+- **Natural Language Automation**: Uses Google Gemini AI to navigate the shipping tracking website without hardcoded interactions
+- **Process Persistence**: Stores successful interactions in JSON format for future use
 - **Adaptability**: Handles different booking IDs with minimal manual intervention
-- **Optimized Browser Control**: Configurable viewport size and headless operation
+- **Intelligent Error Recovery**: Gracefully handles website changes and restrictions
+- **Output Verification**: Validates retrieved data against expected formats
 
 ## Setup Instructions
 
@@ -21,7 +22,7 @@ Check out the project demonstration video:
 
 - Python 3.11 or higher
 - Internet connection
-- OpenAI API key (for GPT-4o model)
+- A Google API key for Gemini AI
 
 ### Installation
 

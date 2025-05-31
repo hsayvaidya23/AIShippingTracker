@@ -20,5 +20,3 @@ IF "%~1"=="" (
     echo Tracking booking ID: %1
     python adaptive_tracking.py %HEADLESS% %1
 )
-
-pause 
