@@ -1,5 +1,5 @@
 from langchain_google_genai import ChatGoogleGenerativeAI  
-from browser_use import Agent, Browser, BrowserConfig, BrowserSession  # Removed BrowserSession import
+from browser_use import Agent, Browser, BrowserConfig, BrowserSession
 from dotenv import load_dotenv
 import asyncio
 import json
@@ -10,6 +10,8 @@ import warnings
 
 # Ignore ResourceWarnings (e.g., unclosed browser sessions)
 warnings.filterwarnings("ignore", category=ResourceWarning)
+warnings.filterwarnings("ignore", message="unclosed.*")
+warnings.filterwarnings("ignore", message="I/O operation on closed pipe")
 
 # Load environment variables from .env
 load_dotenv()
@@ -35,77 +37,133 @@ def extract_tracking_fields(result, booking_id):
     Accepts either a string or dict result.
     Returns a dict with only those fields.
     """
-    import re, json
-    # If result is a dict with the fields, return them directly
-    if isinstance(result, dict):
-        # Try to get from top-level or nested 'result' or 'raw_result'
-        for key in ['result', 'raw_result']:
-            if key in result:
-                return extract_tracking_fields(result[key], booking_id)
-        # If all fields present, return
-        if all(k in result for k in ['booking_id', 'voyage_number', 'vessel_name', 'arrival_date']):
-            return {
-                'booking_id': result['booking_id'],
-                'vessel_name': result['vessel_name'],
-                'voyage_number': result['voyage_number'],
-                'arrival_date': result['arrival_date']
-            }
-        # If only some fields, continue to parse as string
-        result = str(result)
-    # If result is a string, try to extract fields
-    text = str(result)
-    # 1. Try to extract JSON code block with vessel_voyage
-    json_block = re.search(r'```json(.*?)```', text, re.DOTALL)
-    if json_block:
-        try:
-            data = json.loads(json_block.group(1))
-            if 'vessel_voyage' in data and isinstance(data['vessel_voyage'], list) and data['vessel_voyage']:
-                v = data['vessel_voyage'][0]
-                return {
-                    'booking_id': booking_id,
-                    'vessel_name': v.get('vessel_name', 'Not available'),
-                    'voyage_number': v.get('voyage_number', 'Not available'),
-                    'arrival_date': v.get('arrival_date_time', 'Not available')
-                }
-        except Exception:
-            pass
-    # 2. Vessel Movement table row: | YM MANDATE 0096W | PS3 | SINGAPORE | 2025-03-17 11:00 | NHAVA SHEVA, INDIA | 2025-03-28 10:38 |
-    vessel_row = re.search(r'\|\s*([A-Z0-9\- ]+)\s+(\d{4,5}[A-Z])\s*\|[^\|]*\|[^\|]*\|[^\|]*\|[^\|]*\|\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*\|', text)
-    if vessel_row:
-        vessel_name = vessel_row.group(1).strip()
-        voyage_number = vessel_row.group(2).strip()
-        arrival_date = vessel_row.group(3).strip()
-        return {
-            'booking_id': booking_id,
-            'vessel_name': vessel_name,
-            'voyage_number': voyage_number,
-            'arrival_date': arrival_date
-        }
-    # 3. Fallback: try to extract from summary line
-    summary = re.search(r"Voyage number: ([A-Z0-9]+). Arrival date: (\d{4}-\d{2}-\d{2} \d{2}:\d{2})", text)
-    if summary:
-        voyage_number = summary.group(1)
-        arrival_date = summary.group(2)
-        # Try to extract vessel name from previous lines
-        vessel_name = None
-        vessel_match = re.search(r'Vessel / Voyage \|.*\n\| ([A-Z0-9\- ]+) '+voyage_number, text)
-        if vessel_match:
-            vessel_name = vessel_match.group(1).strip()
-        else:
-            vessel_name = 'Not available'
-        return {
-            'booking_id': booking_id,
-            'vessel_name': vessel_name,
-            'voyage_number': voyage_number,
-            'arrival_date': arrival_date
-        }
-    # If not found, return Not available
-    return {
+    print(f"\nDEBUG: Result type: {type(result)}")
+    print(f"DEBUG: Result content: {result[:500]}..." if isinstance(result, str) else f"DEBUG: Result content: {result}")
+    
+    # Initialize return structure
+    extracted = {
         'booking_id': booking_id,
         'vessel_name': 'Not available',
         'voyage_number': 'Not available',
         'arrival_date': 'Not available'
     }
+    
+    # If input is a dict, try to handle nested structures first
+    if isinstance(result, dict):
+        # Check for result/raw_result nesting
+        for key in ['result', 'raw_result', 'data']:
+            if key in result:
+                nested_result = extract_tracking_fields(result[key], booking_id)
+                if nested_result['vessel_name'] != 'Not available':
+                    return nested_result
+        
+        # Try direct vessel_voyage structure
+        if 'vessel_voyage' in result and isinstance(result['vessel_voyage'], list) and result['vessel_voyage']:
+            v = result['vessel_voyage'][0]
+            if 'vessel_name' in v:
+                extracted['vessel_name'] = v.get('vessel_name')
+                extracted['voyage_number'] = v.get('voyage_number', 'Not available')
+                # Handle different date field names
+                for date_key in ['arrival_date_time', 'arrival_date', 'etb']:
+                    if date_key in v and v[date_key]:
+                        extracted['arrival_date'] = v[date_key]
+                        break
+                if any(val != 'Not available' for val in extracted.values()):
+                    return extracted
+    
+    # Convert to string for pattern matching
+    text = str(result)
+    
+    # Try each pattern in order of reliability
+    
+    # 1. Look for structured vessel_voyage JSON pattern
+    vessel_voyage_match = re.search(r'"vessel_voyage":\s*\[\s*\{[^}]*"vessel_name":\s*"([^"]+)"[^}]*"voyage_number":\s*"([^"]+)"[^}]*"(?:arrival_date_time|arrival_date|etb)":\s*"([^"]+)"', text)
+    if vessel_voyage_match:
+        print("DEBUG: Found vessel_voyage JSON pattern")
+        vessel_name, voyage_num, arr_date = vessel_voyage_match.groups()
+        if vessel_name and voyage_num and arr_date:
+            return {
+                'booking_id': booking_id,
+                'vessel_name': vessel_name,
+                'voyage_number': voyage_num,
+                'arrival_date': arr_date
+            }
+    
+    # 2. Look for JSON code blocks
+    json_blocks = re.finditer(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
+    for match in json_blocks:
+        try:
+            data = json.loads(match.group())
+            # Check various JSON structures we might encounter
+            if 'vessel_voyage' in data and isinstance(data['vessel_voyage'], list) and data['vessel_voyage']:
+                v = data['vessel_voyage'][0]
+                if 'vessel_name' in v:
+                    print("DEBUG: Found vessel_voyage in JSON block")
+                    extracted['vessel_name'] = v.get('vessel_name')
+                    extracted['voyage_number'] = v.get('voyage_number', 'Not available')
+                    # Try different date field names
+                    for date_key in ['arrival_date_time', 'arrival_date', 'etb']:
+                        if date_key in v and v[date_key]:
+                            extracted['arrival_date'] = v[date_key]
+                            break
+                    if extracted['vessel_name'] != 'Not available':
+                        return extracted
+            # Alternative structure
+            elif all(key in data for key in ['vessel_name', 'voyage_number']):
+                print("DEBUG: Found direct fields in JSON block")
+                extracted['vessel_name'] = data.get('vessel_name')
+                extracted['voyage_number'] = data.get('voyage_number')
+                # Try different date field names
+                for date_key in ['arrival_date_time', 'arrival_date', 'etb']:
+                    if date_key in data and data[date_key]:
+                        extracted['arrival_date'] = data[date_key]
+                        break
+                if extracted['vessel_name'] != 'Not available':
+                    return extracted
+        except json.JSONDecodeError:
+            continue
+    
+    # 3. Try to extract from table format
+    # Matches vessel name and voyage number in various formats
+    vessel_row = re.search(
+        r'\|\s*([A-Z0-9\- ]+?)(?:\s+(\d{4,5}[A-Z]))?[^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*\|\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2})',
+        text
+    )
+    if vessel_row:
+        print("DEBUG: Found vessel info in table format")
+        vessel_name = vessel_row.group(1).strip()
+        # Group 2 might be None if voyage number wasn't in expected format
+        voyage_number = vessel_row.group(2) if vessel_row.group(2) else 'Not available'
+        arrival_date = vessel_row.group(3).strip()
+        if vessel_name and arrival_date:
+            return {
+                'booking_id': booking_id,
+                'vessel_name': vessel_name,
+                'voyage_number': voyage_number,
+                'arrival_date': arrival_date
+            }
+    
+    # 4. Look for plaintext patterns
+    # Vessel name patterns like "vessel name is YM MANDATE" or "Vessel Name: YM MANDATE"
+    vessel_name_match = re.search(r'(?:vessel\s+name\s+is|Vessel\s+Name:?)\s+([A-Z0-9\- ]+)', text)
+    voyage_num_match = re.search(r'(?:voyage\s+number\s+is|Voyage\s+Number:?)\s+([A-Z0-9\-]+)', text)
+    arrival_date_match = re.search(r'(?:arrival\s+date(?:\s+and\s+time)?\s+is|Arrival\s+Date\s+and\s+Time\s*(?:\(ETB\))?:?)\s+(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2})', text)
+    
+    if vessel_name_match:
+        extracted['vessel_name'] = vessel_name_match.group(1).strip()
+    if voyage_num_match:
+        extracted['voyage_number'] = voyage_num_match.group(1).strip()
+    if arrival_date_match:
+        extracted['arrival_date'] = arrival_date_match.group(1).strip()
+    
+    # Only return if we found something
+    if any(val != 'Not available' for val in extracted.values()):
+        print("DEBUG: Found values in plaintext")
+        return extracted
+    
+    # If we got here, we couldn't extract the data reliably
+    print("DEBUG: No reliable data found, returning default values")
+    return extracted
 
 async def track_shipping(booking_id, use_stored=True, headless=False):
     """
@@ -126,7 +184,7 @@ async def track_shipping(booking_id, use_stored=True, headless=False):
         google_api_key=google_api_key
     )
     
-    # Define the task with clear instructions
+    # Define the task with clear instructions    
     task = f"""
         Track HMM shipping container with booking ID '{booking_id}':
     
@@ -136,15 +194,19 @@ async def track_shipping(booking_id, use_stored=True, headless=False):
             - Input booking ID in search or B/L No. field 
             - Click on Search button 
         4. Scrape the full page content and extract:
-            - Voyage number from vessel name format (XXXXX XXXW)
+            - Vessel name (e.g., YM MANDATE)
+            - Voyage number from vessel name format (e.g., 0096W)
             - Arrival date with time from ETB (Estimated Time of Berthing)
     
-    Return JSON with:
+    Return the data in this exact JSON format:
     {{
-        "booking_id": "{booking_id}",
-        "voyage_number": "extracted voyage number or 'Not available'",
-        "arrival_date": "extracted arrival date or 'Not available'",
-        "notes": "Include any issues encountered with website restrictions"
+        "vessel_voyage": [
+            {{
+                "vessel_name": "extracted vessel name",
+                "voyage_number": "extracted voyage number",
+                "arrival_date_time": "YYYY-MM-DD HH:MM"
+            }}
+        ]
     }}
     """
     
@@ -158,54 +220,42 @@ async def track_shipping(booking_id, use_stored=True, headless=False):
         except Exception as e:
             print(f"Error loading stored interactions: {e}")
             stored_interactions = None
+      # Configure and create browser session for Windows Chrome
+    browser_session = None
+    agent = None
     
-    # Configure and create browser session for Windows Chrome
-    browser_session = BrowserSession(
-        executable_path='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        headless=headless,
-        viewport_size={"width": 1920, "height": 1080},
-        # user_data_dir can be set if you want to persist sessions
-    )
-    await browser_session.start()
-    
-    # Create the agent with optimized settings
-    agent = Agent(
-        task=task,
-        llm=llm,
-        browser_session=browser_session  # Pass BrowserSession
-    )
-    
-    # Run the agent
     try:
+        browser_session = BrowserSession(
+            executable_path='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            headless=headless,
+            viewport_size={"width": 1920, "height": 1080},
+        )
+        await browser_session.start()
+        
+        # Create the agent with optimized settings
+        agent = Agent(
+            task=task,
+            llm=llm,
+            browser_session=browser_session
+        )
+        
+        # Run the agent
         result = await agent.run()
-        # Store the result for future use if we don't already have it
-        if not stored_interactions and result:
-            try:
-                # If result is a string containing JSON, parse it
-                if isinstance(result, str):
-                    try:
-                        result_data = json.loads(result)
-                    except Exception:
-                        result_data = {"raw_result": result}
-                elif isinstance(result, dict):
-                    result_data = result
-                else:
-                    # Try to extract a dict from known attributes
-                    result_data = {"raw_result": str(result)}
-                interactions = {
-                    "created_at": datetime.now().isoformat(),
-                    "booking_id": booking_id,
-                    "result": result_data
-                }
-                with open(STORAGE_FILE, 'w') as f:
-                    json.dump(interactions, f, indent=2)
-                print(f"Stored interactions to {STORAGE_FILE}")
-            except Exception as e:
-                print(f"Error storing interactions: {e}")
+        
+        # Debug: Print raw result
+        print(f"\nDEBUG: Raw agent result type: {type(result)}")
+        print(f"DEBUG: Raw agent result: {result}")
+        
         return result
     finally:
-        # Ensure the browser is closed properly
-        await browser_session.close()
+        # Ensure proper cleanup
+        try:
+            if browser_session:
+                await browser_session.close()
+                # Give it a moment to clean up
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"Warning: Error closing browser session: {e}")
 
 async def main():
     # Example booking ID from the assignment
@@ -227,8 +277,22 @@ async def main():
     print(result)
 
     # Extract and store only the required fields in the JSON file
-    minimal = extract_tracking_fields(result, booking_id)
-    with open(STORAGE_FILE, 'w') as f:
+    minimal = extract_tracking_fields(result, booking_id)    
+    
+    # Save both the raw result and the extracted data for debugging
+    debug_data = {
+        "timestamp": datetime.now().isoformat(),
+        "booking_id": booking_id,
+        "raw_result": str(result),
+        "extracted_data": minimal
+    }
+    debug_file = os.path.join(STORAGE_DIR, f"debug_{booking_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(debug_file, 'w', encoding='utf-8') as f:
+        json.dump(debug_data, f, indent=2, ensure_ascii=False)
+    print(f"\nDEBUG: Saved debug data to {debug_file}")
+    
+    # Save the minimal tracking result
+    with open(STORAGE_FILE, 'w', encoding='utf-8') as f:
         json.dump(minimal, f, indent=2, ensure_ascii=False)
     print(f"\n✅ Saved minimal tracking result to {STORAGE_FILE}:")
     print(json.dumps(minimal, indent=2, ensure_ascii=False))

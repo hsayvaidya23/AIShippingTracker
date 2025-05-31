@@ -28,77 +28,142 @@ def extract_tracking_fields(result, booking_id):
     Accepts either a string or dict result.
     Returns a dict with only those fields.
     """
-    import re, json
-    # If result is a dict with the fields, return them directly
-    if isinstance(result, dict):
-        # Try to get from top-level or nested 'result' or 'raw_result'
-        for key in ['result', 'raw_result']:
-            if key in result:
-                return extract_tracking_fields(result[key], booking_id)
-        # If all fields present, return
-        if all(k in result for k in ['booking_id', 'voyage_number', 'vessel_name', 'arrival_date']):
-            return {
-                'booking_id': result['booking_id'],
-                'vessel_name': result['vessel_name'],
-                'voyage_number': result['voyage_number'],
-                'arrival_date': result['arrival_date']
-            }
-        # If only some fields, continue to parse as string
-        result = str(result)
-    # If result is a string, try to extract fields
-    text = str(result)
-    # 1. Try to extract JSON code block with vessel_voyage
-    json_block = re.search(r'```json(.*?)```', text, re.DOTALL)
-    if json_block:
-        try:
-            data = json.loads(json_block.group(1))
-            if 'vessel_voyage' in data and isinstance(data['vessel_voyage'], list) and data['vessel_voyage']:
-                v = data['vessel_voyage'][0]
-                return {
-                    'booking_id': booking_id,
-                    'vessel_name': v.get('vessel_name', 'Not available'),
-                    'voyage_number': v.get('voyage_number', 'Not available'),
-                    'arrival_date': v.get('arrival_date_time', 'Not available')
-                }
-        except Exception:
-            pass
-    # 2. Vessel Movement table row: | YM MANDATE 0096W | PS3 | SINGAPORE | 2025-03-17 11:00 | NHAVA SHEVA, INDIA | 2025-03-28 10:38 |
-    vessel_row = re.search(r'\|\s*([A-Z0-9\- ]+)\s+(\d{4,5}[A-Z])\s*\|[^\|]*\|[^\|]*\|[^\|]*\|[^\|]*\|\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*\|', text)
-    if vessel_row:
-        vessel_name = vessel_row.group(1).strip()
-        voyage_number = vessel_row.group(2).strip()
-        arrival_date = vessel_row.group(3).strip()
-        return {
-            'booking_id': booking_id,
-            'vessel_name': vessel_name,
-            'voyage_number': voyage_number,
-            'arrival_date': arrival_date
-        }
-    # 3. Fallback: try to extract from summary line
-    summary = re.search(r"Voyage number: ([A-Z0-9]+). Arrival date: (\d{4}-\d{2}-\d{2} \d{2}:\d{2})", text)
-    if summary:
-        voyage_number = summary.group(1)
-        arrival_date = summary.group(2)
-        # Try to extract vessel name from previous lines
-        vessel_name = None
-        vessel_match = re.search(r'Vessel / Voyage \|.*\n\| ([A-Z0-9\- ]+) '+voyage_number, text)
-        if vessel_match:
-            vessel_name = vessel_match.group(1).strip()
-        else:
-            vessel_name = 'Not available'
-        return {
-            'booking_id': booking_id,
-            'vessel_name': vessel_name,
-            'voyage_number': voyage_number,
-            'arrival_date': arrival_date
-        }
-    # If not found, return Not available
-    return {
+    print(f"\nDEBUG: Result type: {type(result)}")
+    print(f"DEBUG: Result content: {result[:500]}..." if isinstance(result, str) else f"DEBUG: Result content: {result}")
+    
+    def split_vessel_and_voyage(text):
+        """Split combined vessel name and voyage number"""
+        if not text:
+            return None, None
+        # Pattern: name followed by space and number+letter at the end (e.g. "YM MANDATE 0096W")
+        parts = text.strip().rsplit(' ', 1)
+        if len(parts) == 2 and any(c.isdigit() for c in parts[1]) and parts[1][-1].upper() in 'WENS':
+            return parts[0], parts[1]
+        return text, None
+
+    # Initialize return structure
+    extracted = {
         'booking_id': booking_id,
         'vessel_name': 'Not available',
         'voyage_number': 'Not available',
         'arrival_date': 'Not available'
     }
+    print(f"\nDEBUG: Result type: {type(result)}")
+    print(f"DEBUG: Result content: {result[:500]}..." if isinstance(result, str) else f"DEBUG: Result content: {result}")
+    
+    # Initialize return structure
+    extracted = {
+        'booking_id': booking_id,
+        'vessel_name': 'Not available',
+        'voyage_number': 'Not available',
+        'arrival_date': 'Not available'
+    }
+    
+    # First try to handle dict input
+    if isinstance(result, dict):
+        # Try to parse nested results
+        for key in ['result', 'raw_result', 'data']:
+            if key in result:
+                nested_result = extract_tracking_fields(result[key], booking_id)
+                if nested_result['vessel_name'] != 'Not available':
+                    return nested_result
+
+        # Look for vessel_voyage structure
+        if 'vessel_voyage' in result and isinstance(result['vessel_voyage'], list):
+            v = result['vessel_voyage'][0]
+            if 'vessel_name' in v or 'voyage_number' in v:
+                # Extract combined vessel and voyage if present
+                if 'voyage_number' in v and ' ' in v['voyage_number']:
+                    vessel_name, voyage_number = split_vessel_and_voyage(v['voyage_number'])
+                    if vessel_name:
+                        extracted['vessel_name'] = vessel_name
+                    if voyage_number:
+                        extracted['voyage_number'] = voyage_number
+                else:
+                    # Take values as-is
+                    extracted['vessel_name'] = v.get('vessel_name', extracted['vessel_name'])
+                    extracted['voyage_number'] = v.get('voyage_number', extracted['voyage_number'])
+
+                # Try different date field names
+                for date_key in ['arrival_date_time', 'arrival_date', 'etb']:
+                    if date_key in v and v[date_key]:
+                        extracted['arrival_date'] = v[date_key]
+                        break
+
+                if any(val != 'Not available' for val in extracted.values()):
+                    return extracted
+
+    # Convert to string for pattern matching
+    text = str(result)
+    
+    # Look for direct JSON data first
+    json_match = re.search(r'\{[^{}]*"voyage_number":\s*"([^"]+)"[^{}]*\}', text)
+    if json_match:
+        voyage_str = json_match.group(1)
+        vessel_name, voyage_number = split_vessel_and_voyage(voyage_str)
+        if vessel_name:
+            extracted['vessel_name'] = vessel_name
+        if voyage_number:
+            extracted['voyage_number'] = voyage_number
+            # Look for corresponding arrival date
+            date_match = re.search(r'"arrival_date(?:_time)?":\s*"([^"]+)"', text)
+            if date_match:
+                extracted['arrival_date'] = date_match.group(1)
+                return extracted
+
+    # Search for json code blocks
+    json_blocks = re.finditer(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
+    for match in json_blocks:
+        try:
+            data = json.loads(match.group())
+            if 'voyage_number' in data:
+                # Handle combined vessel name and voyage
+                vessel_name, voyage_number = split_vessel_and_voyage(data['voyage_number'])
+                if vessel_name:
+                    extracted['vessel_name'] = vessel_name
+                if voyage_number:
+                    extracted['voyage_number'] = voyage_number
+                    
+                if 'arrival_date' in data:
+                    extracted['arrival_date'] = data['arrival_date']
+                    if any(val != 'Not available' for val in extracted.values()):
+                        return extracted
+        except json.JSONDecodeError:
+            continue
+
+    # Look for specific patterns in text
+    vessel_num = re.search(r'(?:vessel|ship)\s+name\s+(?:and\s+voyage\s+number\s+)?(?:is|:)\s*([A-Z0-9\- ]+\s+\d{4,5}[WENS])', text, re.IGNORECASE)
+    if vessel_num:
+        vessel_name, voyage_number = split_vessel_and_voyage(vessel_num.group(1))
+        if vessel_name:
+            extracted['vessel_name'] = vessel_name
+        if voyage_number:
+            extracted['voyage_number'] = voyage_number
+            # Look for arrival date nearby
+            date_match = re.search(r'arrival\s+date\s*(?:\(ETB\))?\s*(?:is|:)\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', text, re.IGNORECASE)
+            if date_match:
+                extracted['arrival_date'] = date_match.group(1)
+                return extracted
+
+    # Look for plaintext patterns as last resort
+    name_match = re.search(r'(?:vessel|ship)\s+name\s*(?:is|:)\s*([A-Z0-9\- ]+)(?!\d{4,5}[WENS])', text, re.IGNORECASE)
+    if name_match:
+        extracted['vessel_name'] = name_match.group(1).strip()
+
+    voyage_match = re.search(r'voyage\s+(?:number\s+)?(?:is|:)\s*(\d{4,5}[WENS])', text, re.IGNORECASE)
+    if voyage_match:
+        extracted['voyage_number'] = voyage_match.group(1).strip()
+
+    date_match = re.search(r'(?:arrival|eta|etb)\s+(?:date|time)\s*(?:\(ETB\))?\s*(?:is|:)\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', text, re.IGNORECASE)
+    if date_match:
+        extracted['arrival_date'] = date_match.group(1).strip()
+
+    if any(val != 'Not available' for val in extracted.values()):
+        print("DEBUG: Found some values in plain text")
+        return extracted
+    
+    print("DEBUG: No reliable data found, returning defaults")
+    return extracted
 
 async def adaptive_tracking(booking_id, headless=False):
     """
